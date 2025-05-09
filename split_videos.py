@@ -31,16 +31,16 @@ def extract_clip_with_ffmpeg(video_path, output_path, start_time, duration):
         '-ss', str(start_time),  # 起始时间
         '-i', str(video_path),  # 输入文件
         '-t', str(duration),  # 持续时间
-        '-c:v', 'libx264',  # 视频编码
-        '-c:a', 'aac',  # 音频编码
-        '-preset', 'fast',  # 编码速度和质量的权衡
-        '-crf', '22',  # 质量设置，低值=高质量
+        '-c:v', 'h264_nvenc',  # 视频编码
+        '-preset', 'slow',  # 编码速度和质量的权衡
+        '-crf', '18',  # 质量设置，低值=高质量
         str(output_path)
     ]
     process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if process.returncode != 0:
         print(f"FFmpeg error: {process.stderr.decode()}")
         return False
+    print(f"FFmpeg output: {process.stdout.decode()}")
     return True
 
 
@@ -63,6 +63,7 @@ class TaskExecutor:
     def _check_and_submit(self):
         """检查并提交任务"""
         with self.lock:
+            print(f"Running tasks: {self.running}, Queue size: {self.tasks.qsize()}")
             if self.running < self.max_workers and not self.tasks.empty():
                 task_fn, args, kwargs = self.tasks.get()
                 future = self.executor.submit(task_fn, *args, **kwargs)
@@ -71,15 +72,23 @@ class TaskExecutor:
     
     def _task_done(self, future):
         """任务完成的回调"""
+        try:
+            result = future.result()
+        except Exception as e:
+            print(f"Task error: {e}")
+            result = None
+            
         with self.lock:
             self.running -= 1
-            try:
-                result = future.result()
+            print(f"Task completed, running tasks: {self.running}")
+            if result is not None:
                 self.results.append(result)
-            except Exception as e:
-                print(f"Task error: {e}")
-            self._check_and_submit()
-            
+                
+        # Call _check_and_submit outside the lock to prevent deadlock
+        self._check_and_submit()
+        
+        # Check completion status after releasing the lock
+        with self.lock:
             # 如果设置为完成且没有运行中的任务和排队任务，停止执行器
             if self.done and self.running == 0 and self.tasks.empty():
                 self.executor.shutdown(wait=False)
@@ -96,6 +105,7 @@ def process_video_clip(video_path, start_frame, end_frame, fps, output_path, cli
     """处理单个视频片段的函数，用于线程池执行"""
     start_time = start_frame / fps
     duration = (end_frame - start_frame) / fps
+    print(f"Processing clip from {start_time:.2f}s to {start_time + duration:.2f}s")
     success = extract_clip_with_ffmpeg(video_path, output_path, start_time, duration)
     return {
         "output_path": str(output_path), 
@@ -208,8 +218,8 @@ if __name__ == "__main__":
         split_video(
             f"/mnt/data/dtong/pubrepos/OpenTAD/data/b11_phone_motion2_backview/raw_data/video/{video_name}.mp4",
             annotations, 
-            [60, 80], 
-            f"/mnt/data/dtong/pubrepos/OpenTAD/data/b11_phone_motion2_backview/raw_data/clips/",
+            [180, 240], 
+            f"/mnt/data/dtong/pubrepos/OpenTAD/data/b11_phone_motion2_backview/raw_data/clips2/",
             overlap_secs=30,
             train_val_ratio=0.5,
             max_workers=max_workers,
